@@ -3,3 +3,4 @@ __pycache__/
 *.pyo
 *.txt
 .DS_Store
+.venv/
