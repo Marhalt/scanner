@@ -1,6 +1,8 @@
 import os
+import re
 import argparse
 import unicodedata
+from collections import Counter
 import requests
 
 try:
@@ -91,6 +93,34 @@ def strip_diacritics(text):
     normalized = unicodedata.normalize('NFKD', text)
     return ''.join(c for c in normalized if unicodedata.category(c) != 'Mn')
 
+LEADING_SPACES_RE = re.compile(r'^( +)')
+
+def dedent_repeated_leading_spaces(text, min_lines=6):
+    """Strip a leading-space run that recurs on many lines.
+
+    Unicode "narrow" space variants (thin space, figure space, NBSP, etc.)
+    each collapse to a single ASCII space earlier in the pipeline. Source
+    files that stack several such characters per line (a common PDF/ebook
+    extraction artifact used to fake kerning or a paragraph indent) end up
+    with a tab-like run of real spaces on every line. A single stray indent
+    is probably intentional; the same exact run repeated across many lines
+    almost never is, so only prefixes that clear min_lines get removed.
+    """
+    lines = text.split('\n')
+    prefixes = [
+        m.group(1) if (m := LEADING_SPACES_RE.match(line)) else ''
+        for line in lines
+    ]
+    counts = Counter(p for p, line in zip(prefixes, lines) if p and line.strip())
+    to_strip = {p for p, c in counts.items() if c > min_lines}
+    if not to_strip:
+        return text, {}
+    new_lines = [
+        line[len(p):] if p in to_strip else line
+        for line, p in zip(lines, prefixes)
+    ]
+    return '\n'.join(new_lines), {len(p): c for p, c in counts.items() if p in to_strip}
+
 def repair_line_with_llm(line):
     prompt = (
         "The following line of text contains one or more Unicode replacement characters "
@@ -136,6 +166,10 @@ def main():
     parser.add_argument('-save', action='store_true', help='Route every file to clean/ even if weird characters remain')
     parser.add_argument('-force', action='store_true', help='Replace all remaining non-ASCII characters with a space')
     parser.add_argument('-r', '--recursive', action='store_true', help='Recurse into subdirectories')
+    parser.add_argument('-no-dedent', action='store_true',
+                        help='Disable stripping of repeated fake-indent leading spaces')
+    parser.add_argument('-dedent-threshold', type=int, default=6, metavar='N',
+                        help='Strip a leading-space run only if it recurs on more than N lines (default: 6)')
     args = parser.parse_args()
 
     directory = args.directory
@@ -284,6 +318,12 @@ def main():
         # Force-replace any remaining non-ASCII with a space
         if args.force:
             content = ''.join(c if ord(c) <= 127 else ' ' for c in content)
+
+        # Strip fake-indent leading spaces (see dedent_repeated_leading_spaces)
+        if not args.no_dedent:
+            content, stripped = dedent_repeated_leading_spaces(content, args.dedent_threshold)
+            for width, n in sorted(stripped.items()):
+                print(f"{rel}: stripped {width}-space fake indent from {n} lines")
 
         # Check if content was modified
         modified = content != original_content
