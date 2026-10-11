@@ -285,6 +285,9 @@ def main():
         # Normalize newlines (replaces dos2unix): CRLF and lone CR -> LF
         content = content.replace('\r\n', '\n').replace('\r', '\n')
 
+        # Old page-eject marker (DOS/Windows page break) -> paragraph break
+        content = content.replace('\x0c', '\n\n')
+
         # Decode C1 control characters as Windows-1252 before other processing
         content = fix_cp1252_controls(content)
 
