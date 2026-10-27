@@ -29,6 +29,26 @@ def detect_encoding(data: bytes) -> str:
     except UnicodeDecodeError:
         pass
 
+    # For mostly-ASCII text with only a handful of stray high bytes, a
+    # general-purpose multi-language guesser (charset_normalizer/chardet) has
+    # very little signal to work with and can confidently pick an exotic
+    # codepage (EBCDIC, Big5, Cyrillic, ...) that happens to also decode the
+    # bytes without error. In practice those stray bytes are almost always
+    # Windows-1252 smart punctuation, so prefer cp1252 outright when it
+    # applies cleanly, rather than letting the guesser roam its full catalog.
+    ascii_count = sum(1 for b in data if b < 0x80)
+    non_ascii_count = len(data) - ascii_count
+    # A fixed percentage cutoff breaks down on short strings/lines, where a
+    # couple of stray bytes out of a dozen characters looks "dense" by ratio
+    # alone even though it's the same sparse-stray-bytes pattern as a long
+    # document with a few smart quotes in it. Treat either signal as enough.
+    if non_ascii_count <= 5 or ascii_count / len(data) > 0.95:
+        try:
+            data.decode("cp1252")
+            return "cp1252"
+        except UnicodeDecodeError:
+            pass
+
     if from_bytes is not None:
         results = from_bytes(data)
         if results:
